@@ -88,9 +88,9 @@ async def rank(ctx):
 
     # フォント読み込み
     try:
-        font = ImageFont.truetype("arial.ttf", 32)
+    font = ImageFont.truetype("fonts/NotoSansJP-VariableFont_wght.ttf", 32)
     except:
-        font = ImageFont.load_default()
+    font = ImageFont.load_default()
 
     # テキスト描画位置を右下寄りに変更
     name_x, name_y = bg.width - 700, bg.height - 230
