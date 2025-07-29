@@ -206,4 +206,4 @@ async def blackjack(ctx):
     await ctx.author.send(f"あなたの手札: {player_hand}（合計: {total}）", view=view)
 
 # 🔒 注意：ここは絶対に関数の中に書かないでください
-bot.run("MTM5OTY5NTAzOTM5MDU0ODAwOQ.G7qsk2.DolRkmXBpPe8pvc8rr_wRCPrfb10Xrg8CFtCsI")
+bot.run("MTM5OTY5NTAzOTM5MDU0ODAwOQ.GfaN1z.TFVRr_VbWXoqW1gn9Il4b8NuEFkQejWfDb5bQ8")
