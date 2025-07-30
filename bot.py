@@ -6,14 +6,22 @@ import io
 import requests
 from PIL import Image, ImageDraw, ImageFont
 import random
-from discord import ui, ButtonStyle, Interaction
+import time
 from keep_alive import keep_alive
-keep_alive()  # ← bot起動前に必ず呼び出す
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# データ管理
+keep_alive()
+
+# ロールの設定（レベル: ロール名）
+ROLE_REWARDS = {
+    5: "C", 10: "Cプラス", 15: "CC", 25: "Bマイナス", 35: "B",
+    45: "Bプラス", 55: "BB", 70: "Aマイナス", 85: "A", 90: "Aプラス",
+    100: "AA", 125: "Sマイナス", 130: "S", 140: "Sプラス", 150: "SS", 200: "国家権力級"
+}
+
+# データ保存
 def load_data():
     try:
         with open("data.json", "r") as f:
@@ -26,33 +34,64 @@ def save_data(data):
         json.dump(data, f, indent=2)
 
 user_data = load_data()
+chat_cooldown = {}
 
-# レベル計算式（ここで自由に調整可能）
-def calculate_level(xp):
-    return xp // 100  # 例：100XPごとに1レベルアップ
+# レベルに必要なXP計算式
+def get_required_xp(level):
+    return 100 + 50 * max(level - 1, 0)
+
+def check_level_up(uid, member, channel=None):
+    xp = user_data[uid]["xp"]
+    level = user_data[uid]["level"]
+    while xp >= get_required_xp(level):
+        xp -= get_required_xp(level)
+        level += 1
+    changed = level != user_data[uid]["level"]
+    user_data[uid]["xp"] = xp
+    user_data[uid]["level"] = level
+    if changed and channel:
+        return True, level
+    return changed, level
+
+async def update_roles(member, new_level):
+    guild_roles = {role.name: role for role in member.guild.roles}
+    roles_to_add = [name for lvl, name in ROLE_REWARDS.items() if lvl == new_level]
+    roles_to_remove = [guild_roles[name] for lvl, name in ROLE_REWARDS.items() if lvl != new_level and name in [r.name for r in member.roles]]
+
+    # 古いロールを削除
+    for role in roles_to_remove:
+        await member.remove_roles(role)
+
+    # 新しいロールを追加
+    for role_name in roles_to_add:
+        role = guild_roles.get(role_name)
+        if role:
+            await member.add_roles(role)
 
 @bot.event
 async def on_ready():
     print("✅ Bot起動完了！")
-    print(f"ログインユーザー: {bot.user}")
-    try:
-        voice_tracker.start()
-        print("🎧 voice_tracker 起動しました")
-    except Exception as e:
-        print(f"❌ voice_tracker 起動エラー: {e}")
+    voice_tracker.start()
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
     uid = str(message.author.id)
-    user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
+    now = time.time()
+    last_time = chat_cooldown.get(uid, 0)
+    if now - last_time < 60:  # クールタイム60秒
+        await bot.process_commands(message)
+        return
 
-    user_data[uid]["xp"] += 1 / 30  # 約30メッセージで+1XP
-    new_level = calculate_level(user_data[uid]["xp"])
-    if new_level > user_data[uid]["level"]:
-        user_data[uid]["level"] = new_level
+    chat_cooldown[uid] = now
+    user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
+    user_data[uid]["xp"] += 10
+
+    changed, new_level = check_level_up(uid, message.author, message.channel)
+    if changed:
         await message.channel.send(f"🎉 {message.author.mention} がレベル {new_level} に到達！")
+        await update_roles(message.author, new_level)
 
     save_data(user_data)
     await bot.process_commands(message)
@@ -66,16 +105,13 @@ async def voice_tracker():
                     continue
                 uid = str(member.id)
                 user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
-                user_data[uid]["xp"] += 0.1  # 10分で+1XP
+                user_data[uid]["xp"] += 1  # 毎分1XP（10分で10XP）
                 user_data[uid]["voice_minutes"] += 1
-                new_level = calculate_level(user_data[uid]["xp"])
-                if new_level > user_data[uid]["level"]:
-                    user_data[uid]["level"] = new_level
-                    channel = member.guild.system_channel
-                    if channel:
-                        await channel.send(f"📞 {member.mention} が通話でレベル {new_level} に！")
+                changed, new_level = check_level_up(uid, member)
+                if changed and member.guild.system_channel:
+                    await member.guild.system_channel.send(f"📞 {member.mention} が通話でレベル {new_level} に！")
+                    await update_roles(member, new_level)
     save_data(user_data)
-
 # !rank コマンド
 @bot.command()
 async def rank(ctx):
