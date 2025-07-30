@@ -7,6 +7,8 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 import random
 from discord import ui, ButtonStyle, Interaction
+from keep_alive import keep_alive
+keep_alive()  # ← bot起動前に必ず呼び出す
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
