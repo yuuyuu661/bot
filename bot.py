@@ -97,7 +97,7 @@ async def on_message(message):
     if now - last >= 60:
         chat_cooldown[uid] = now
         user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
-        user_data[uid]["xp"] += 10
+        user_data[uid]["xp"] += 10 / 30 
         new_level = calculate_level(user_data[uid]["xp"])
         if new_level > user_data[uid]["level"]:
             user_data[uid]["level"] = new_level
@@ -141,9 +141,9 @@ async def rank(ctx):
         font = ImageFont.load_default()
 
     draw.text((50, 50), f"{ctx.author.name}", font=font, fill=(0, 0, 0))
-    draw.text((50, 100), f"Level: {level}", font=font, fill=(0, 0, 0))
-    draw.text((50, 150), f"XP: {xp:.1f}", font=font, fill=(0, 0, 0))
-    draw.text((50, 200), f"{int(cur)} / {int(need)} XP", font=font, fill=(139, 0, 0))
+    draw.text((50, 100), f"Level: {level}", font=font, fill=(139, 0, 0))
+    draw.text((50, 150), f"XP: {xp:.1f}", font=font, fill=(139, 0, 0))
+    draw.text((50, 200), f"{int(cur)} / {int(need)} XP", font=font, fill=(0, 0, 0))
 
     avatar_asset = ctx.author.display_avatar.replace(size=128, static_format="png")
     avatar_bytes = await avatar_asset.read()
