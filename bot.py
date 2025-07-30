@@ -3,97 +3,107 @@ import discord
 from discord.ext import commands, tasks
 import json
 import io
-import requests
 from PIL import Image, ImageDraw, ImageFont
 import random
-import time
+from discord import ui
 from keep_alive import keep_alive
+
+keep_alive()
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-keep_alive()
+user_data_file = "data.json"
 
-# ロールの設定（レベル: ロール名）
-ROLE_REWARDS = {
-    5: "C", 10: "C+", 15: "CC", 25: "B-", 35: "B",
-    45: "B+", 55: "BB", 70: "A-", 85: "A", 90: "A+",
-    100: "AA", 125: "S-", 130: "S", 140: "S+", 150: "SS", 200: "国家権力級"
-}
-
-# データ保存
 def load_data():
     try:
-        with open("data.json", "r") as f:
+        with open(user_data_file, "r") as f:
             return json.load(f)
     except:
         return {}
 
 def save_data(data):
-    with open("data.json", "w") as f:
+    with open(user_data_file, "w") as f:
         json.dump(data, f, indent=2)
 
 user_data = load_data()
 chat_cooldown = {}
 
-# レベルに必要なXP計算式
-def get_required_xp(level):
-    return 100 + 50 * max(level - 1, 0)
+def xp_for_next_level(level):
+    return 100 + 50 * level
 
-def check_level_up(uid, member, channel=None):
-    xp = user_data[uid]["xp"]
-    level = user_data[uid]["level"]
-    while xp >= get_required_xp(level):
-        xp -= get_required_xp(level)
+def calculate_level(xp):
+    level = 0
+    while xp >= xp_for_next_level(level):
+        xp -= xp_for_next_level(level)
         level += 1
-    changed = level != user_data[uid]["level"]
-    user_data[uid]["xp"] = xp
-    user_data[uid]["level"] = level
-    if changed and channel:
-        return True, level
-    return changed, level
+    return level
+
+def get_total_xp_required(level):
+    return sum(xp_for_next_level(i) for i in range(level))
+
+def get_xp_progress(xp):
+    level = calculate_level(xp)
+    current_level_xp = xp - get_total_xp_required(level)
+    next_level_xp = xp_for_next_level(level)
+    return level, current_level_xp, next_level_xp
+
+level_roles = {
+    5: "C",
+    10: "Cプラス",
+    15: "CC",
+    25: "Bマイナス",
+    35: "B",
+    45: "Bプラス",
+    55: "BB",
+    70: "Aマイナス",
+    85: "A",
+    90: "Aプラス",
+    100: "AA",
+    125: "Sマイナス",
+    130: "S",
+    140: "Sプラス",
+    150: "SS",
+    200: "国家権力級"
+}
 
 async def update_roles(member, new_level):
-    guild_roles = {role.name: role for role in member.guild.roles}
-    roles_to_add = [name for lvl, name in ROLE_REWARDS.items() if lvl == new_level]
-    roles_to_remove = [guild_roles[name] for lvl, name in ROLE_REWARDS.items() if lvl != new_level and name in [r.name for r in member.roles]]
-
-    # 古いロールを削除
+    guild = member.guild
+    roles_to_remove = [guild.get_role(r.id) for r in member.roles if r.name in level_roles.values()]
     for role in roles_to_remove:
         await member.remove_roles(role)
 
-    # 新しいロールを追加
-    for role_name in roles_to_add:
-        role = guild_roles.get(role_name)
+    if new_level in level_roles:
+        role_name = level_roles[new_level]
+        role = discord.utils.get(guild.roles, name=role_name)
         if role:
             await member.add_roles(role)
 
 @bot.event
 async def on_ready():
     print("✅ Bot起動完了！")
-    voice_tracker.start()
+    try:
+        voice_tracker.start()
+    except:
+        pass
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
     uid = str(message.author.id)
-    now = time.time()
-    last_time = chat_cooldown.get(uid, 0)
-    if now - last_time < 60:  # クールタイム60秒
-        await bot.process_commands(message)
-        return
-
-    chat_cooldown[uid] = now
-    user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
-    user_data[uid]["xp"] += 10
-
-    changed, new_level = check_level_up(uid, message.author, message.channel)
-    if changed:
-        await message.channel.send(f"🎉 {message.author.mention} がレベル {new_level} に到達！")
-        await update_roles(message.author, new_level)
-
-    save_data(user_data)
+    now = discord.utils.utcnow().timestamp()
+    last = chat_cooldown.get(uid, 0)
+    if now - last >= 60:
+        chat_cooldown[uid] = now
+        user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
+        user_data[uid]["xp"] += 10
+        new_level = calculate_level(user_data[uid]["xp"])
+        if new_level > user_data[uid]["level"]:
+            user_data[uid]["level"] = new_level
+            await update_roles(message.author, new_level)
+            await message.channel.send(f"🎉 {message.author.mention} がレベル {new_level} に到達！")
+        save_data(user_data)
     await bot.process_commands(message)
 
 @tasks.loop(minutes=1)
@@ -105,77 +115,57 @@ async def voice_tracker():
                     continue
                 uid = str(member.id)
                 user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
-                user_data[uid]["xp"] += 1  # 毎分1XP（10分で10XP）
+                user_data[uid]["xp"] += 1
                 user_data[uid]["voice_minutes"] += 1
-                changed, new_level = check_level_up(uid, member)
-                if changed and member.guild.system_channel:
-                    await member.guild.system_channel.send(f"📞 {member.mention} が通話でレベル {new_level} に！")
+                new_level = calculate_level(user_data[uid]["xp"])
+                if new_level > user_data[uid]["level"]:
+                    user_data[uid]["level"] = new_level
                     await update_roles(member, new_level)
+                    if member.guild.system_channel:
+                        await member.guild.system_channel.send(f"📞 {member.mention} が通話でレベル {new_level} に！")
     save_data(user_data)
-# !rank コマンド
+
 @bot.command()
 async def rank(ctx):
     uid = str(ctx.author.id)
     data = user_data.get(uid, {"xp": 0, "level": 0})
     xp = data["xp"]
-    level = data["level"]
+    level, cur, need = get_xp_progress(xp)
 
-    # 背景画像読み込み
     bg = Image.open("background.png").convert("RGBA")
     draw = ImageDraw.Draw(bg)
 
-    # フォント読み込み
     try:
         font = ImageFont.truetype("fonts/NotoSansJP-VariableFont_wght.ttf", 32)
     except:
         font = ImageFont.load_default()
 
-    # テキスト描画位置を右下寄りに変更
-    name_x, name_y = bg.width - 700, bg.height - 230
-    level_label_x, level_y = bg.width - 700, bg.height - 180
-    level_value_x = level_label_x + 90
-    xp_label_x, xp_y = bg.width - 700, bg.height - 130
-    xp_value_x = xp_label_x + 90
+    draw.text((50, 50), f"{ctx.author.name}", font=font, fill=(0, 0, 0))
+    draw.text((50, 100), f"Level: {level}", font=font, fill=(0, 0, 0))
+    draw.text((50, 150), f"XP: {xp:.1f}", font=font, fill=(0, 0, 0))
+    draw.text((50, 200), f"{int(cur)} / {int(need)} XP", font=font, fill=(139, 0, 0))
 
-    # ユーザー名（黒）
-    draw.text((name_x, name_y), f"{ctx.author.name}", font=font, fill=(0, 0, 0))
-
-    # Level（ラベル黒、数字赤）
-    draw.text((level_label_x, level_y), "Level:", font=font, fill=(0, 0, 0))
-    draw.text((level_value_x, level_y), f"{level}", font=font, fill=(139, 0, 0))
-
-    # XP（ラベル黒、数字赤）
-    draw.text((xp_label_x, xp_y), "XP:", font=font, fill=(0, 0, 0))
-    draw.text((xp_value_x, xp_y), f"{xp:.1f}", font=font, fill=(139, 0, 0))
-
-
-    # アイコン円形切り抜き
     avatar_asset = ctx.author.display_avatar.replace(size=128, static_format="png")
     avatar_bytes = await avatar_asset.read()
-    pfp_size = 140  # サイズ変更（100→120）
-    pfp = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((pfp_size, pfp_size))
-    mask = Image.new("L", (pfp_size, pfp_size), 0)
+    pfp = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((128, 128))
+    mask = Image.new("L", (128, 128), 0)
     draw_mask = ImageDraw.Draw(mask)
-    draw_mask.ellipse((0, 0, pfp_size, pfp_size), fill=255)
-    bg.paste(pfp, (600, 20), mask)  # 表示位置も少し上に & 左に調整
+    draw_mask.ellipse((0, 0, 128, 128), fill=255)
+    bg.paste(pfp, (bg.width - 180, 30), mask)
 
-    # 画像送信
     with io.BytesIO() as buffer:
         bg.save(buffer, format="PNG")
         buffer.seek(0)
         await ctx.send(file=discord.File(fp=buffer, filename="rankcard.png"))
 
-# !rankall コマンド（ランキング表示）
 @bot.command()
 async def rankall(ctx):
-    guild = ctx.guild
     sorted_users = sorted(user_data.items(), key=lambda x: x[1]["xp"], reverse=True)
     msg = "**📊 サーバー内ランキング：**\n"
     for i, (uid, data) in enumerate(sorted_users[:10], 1):
-        member = guild.get_member(int(uid))
+        member = ctx.guild.get_member(int(uid))
         name = member.display_name if member else f"User {uid}"
         msg += f"{i}. {name} - Lv{data['level']} ({data['xp']:.1f} XP)\n"
-
     await ctx.send(msg)
 # --- ブラックジャック ---
 active_games = {}
