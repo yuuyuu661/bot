@@ -50,35 +50,44 @@ def get_xp_progress(xp):
 
 level_roles = {
     5: "C",
-    10: "Cプラス",
+    10: "C-",
     15: "CC",
-    25: "Bマイナス",
+    25: "B-",
     35: "B",
-    45: "Bプラス",
+    45: "B+",
     55: "BB",
-    70: "Aマイナス",
+    70: "A-",
     85: "A",
-    90: "Aプラス",
+    90: "A+",
     100: "AA",
-    125: "Sマイナス",
+    125: "S-",
     130: "S",
-    140: "Sプラス",
+    140: "S+",
     150: "SS",
     200: "国家権力級"
 }
 
 async def update_roles(member, new_level):
     guild = member.guild
-    roles_to_remove = [guild.get_role(r.id) for r in member.roles if r.name in level_roles.values()]
+
+    # 現在のレベルに該当するロール名を取得（最も近いが超えてない最大のキー）
+    target_role_name = None
+    for level_threshold in sorted(level_roles.keys(), reverse=True):
+        if new_level >= level_threshold:
+            target_role_name = level_roles[level_threshold]
+            break
+
+    # 削除対象：level_roles に定義されてるすべてのロール（今後の上位も含めて）
+    roles_to_remove = [role for role in member.roles if role.name in level_roles.values()]
+
     for role in roles_to_remove:
         await member.remove_roles(role)
 
-    if new_level in level_roles:
-        role_name = level_roles[new_level]
-        role = discord.utils.get(guild.roles, name=role_name)
-        if role:
-            await member.add_roles(role)
-
+    # 新しいロールを付与（存在すれば）
+    if target_role_name:
+        role_to_add = discord.utils.get(guild.roles, name=target_role_name)
+        if role_to_add:
+            await member.add_roles(role_to_add)
 @bot.event
 async def on_ready():
     print("✅ Bot起動完了！")
@@ -236,3 +245,4 @@ async def blackjack(ctx):
 
 # 🔒 注意：ここは絶対に関数の中に書かないでください
 bot.run(os.getenv("DISCORD_TOKEN"))
+
