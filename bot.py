@@ -176,6 +176,30 @@ async def rankall(ctx):
         name = member.display_name if member else f"User {uid}"
         msg += f"{i}. {name} - Lv{data['level']} ({data['xp']:.1f} XP)\n"
     await ctx.send(msg)
+@bot.command()
+async def addxp(ctx, member: discord.Member, amount: float):
+    allowed_users = [440893662701027328, 716667546241335328]
+    if ctx.author.id not in allowed_users:
+        await ctx.send("❌ このコマンドを使う権限がありません。")
+        return
+
+    uid = str(member.id)
+    user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
+    before_level = user_data[uid]["level"]
+
+    # 経験値加算
+    user_data[uid]["xp"] += amount
+    new_level = calculate_level(user_data[uid]["xp"])
+    user_data[uid]["level"] = new_level
+    save_data(user_data)
+
+    await update_roles(member, new_level)
+
+    if new_level > before_level:
+        await ctx.send(f"🎉 {member.mention} に {amount} XP を付与しました！レベルが {before_level} → {new_level} に上がりました。")
+    else:
+        await ctx.send(f"✅ {member.mention} に {amount} XP を付与しました（現在 Lv{new_level}）。")
+
 # --- ブラックジャック ---
 active_games = {}
 
@@ -245,4 +269,5 @@ async def blackjack(ctx):
 
 # 🔒 注意：ここは絶対に関数の中に書かないでください
 bot.run(os.getenv("DISCORD_TOKEN"))
+
 
