@@ -1,5 +1,6 @@
 import os
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 import json
 import io
@@ -69,25 +70,19 @@ level_roles = {
 
 async def update_roles(member, new_level):
     guild = member.guild
-
-    # 現在のレベルに該当するロール名を取得（最も近いが超えてない最大のキー）
     target_role_name = None
     for level_threshold in sorted(level_roles.keys(), reverse=True):
         if new_level >= level_threshold:
             target_role_name = level_roles[level_threshold]
             break
-
-    # 削除対象：level_roles に定義されてるすべてのロール（今後の上位も含めて）
     roles_to_remove = [role for role in member.roles if role.name in level_roles.values()]
-
     for role in roles_to_remove:
         await member.remove_roles(role)
-
-    # 新しいロールを付与（存在すれば）
     if target_role_name:
         role_to_add = discord.utils.get(guild.roles, name=target_role_name)
         if role_to_add:
             await member.add_roles(role_to_add)
+
 @bot.event
 async def on_ready():
     print("✅ Bot起動完了！")
@@ -95,6 +90,7 @@ async def on_ready():
         voice_tracker.start()
     except:
         pass
+    await bot.tree.sync()
 
 @bot.event
 async def on_message(message):
@@ -106,7 +102,7 @@ async def on_message(message):
     if now - last >= 60:
         chat_cooldown[uid] = now
         user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
-        user_data[uid]["xp"] += 10 / 30 
+        user_data[uid]["xp"] += 10 / 30
         new_level = calculate_level(user_data[uid]["xp"])
         if new_level > user_data[uid]["level"]:
             user_data[uid]["level"] = new_level
@@ -134,27 +130,32 @@ async def voice_tracker():
                         await member.guild.system_channel.send(f"📞 {member.mention} が通話でレベル {new_level} に！")
     save_data(user_data)
 
-@bot.command()
-async def rank(ctx):
-    uid = str(ctx.author.id)
+# =====================
+# Slash Commands
+# =====================
+
+@bot.tree.command(name="rank", description="自分または指定ユーザーのランクカードを表示します")
+@app_commands.describe(user="表示するユーザー（省略可）")
+async def rank_slash(interaction: discord.Interaction, user: discord.Member = None):
+    target = user or interaction.user
+    uid = str(target.id)
     data = user_data.get(uid, {"xp": 0, "level": 0})
     xp = data["xp"]
     level, cur, need = get_xp_progress(xp)
 
     bg = Image.open("background.png").convert("RGBA")
     draw = ImageDraw.Draw(bg)
-
     try:
         font = ImageFont.truetype("fonts/NotoSansJP-VariableFont_wght.ttf", 32)
     except:
         font = ImageFont.load_default()
 
-    draw.text((50, 50), f"{ctx.author.name}", font=font, fill=(0, 0, 0))
+    draw.text((50, 50), f"{target.name}", font=font, fill=(0, 0, 0))
     draw.text((50, 100), f"Level: {level}", font=font, fill=(139, 0, 0))
     draw.text((50, 150), f"XP: {xp:.1f}", font=font, fill=(139, 0, 0))
     draw.text((50, 200), f"{int(cur)} / {int(need)} XP", font=font, fill=(0, 0, 0))
 
-    avatar_asset = ctx.author.display_avatar.replace(size=128, static_format="png")
+    avatar_asset = target.display_avatar.replace(size=128, static_format="png")
     avatar_bytes = await avatar_asset.read()
     pfp = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((128, 128))
     mask = Image.new("L", (128, 128), 0)
@@ -165,109 +166,59 @@ async def rank(ctx):
     with io.BytesIO() as buffer:
         bg.save(buffer, format="PNG")
         buffer.seek(0)
-        await ctx.send(file=discord.File(fp=buffer, filename="rankcard.png"))
+        await interaction.response.send_message(file=discord.File(fp=buffer, filename="rankcard.png"))
 
-@bot.command()
-async def rankall(ctx):
+@bot.tree.command(name="rankall", description="サーバー内ランキング上位10人を表示します")
+async def rankall_slash(interaction: discord.Interaction):
     sorted_users = sorted(user_data.items(), key=lambda x: x[1]["xp"], reverse=True)
     msg = "**📊 サーバー内ランキング：**\n"
     for i, (uid, data) in enumerate(sorted_users[:10], 1):
-        member = ctx.guild.get_member(int(uid))
+        member = interaction.guild.get_member(int(uid))
         name = member.display_name if member else f"User {uid}"
         msg += f"{i}. {name} - Lv{data['level']} ({data['xp']:.1f} XP)\n"
-    await ctx.send(msg)
-@bot.command()
-async def addxp(ctx, member: discord.Member, amount: float):
-    allowed_users = [440893662701027328, 716667546241335328]
-    if ctx.author.id not in allowed_users:
-        await ctx.send("❌ このコマンドを使う権限がありません。")
-        return
+    await interaction.response.send_message(msg)
 
-    uid = str(member.id)
+@bot.tree.command(name="addxp", description="指定ユーザーのXPを増加させます（権限者のみ）")
+@app_commands.describe(user="対象ユーザー", amount="追加するXP量")
+async def addxp_slash(interaction: discord.Interaction, user: discord.Member, amount: float):
+    allowed_users = [440893662701027328, 716667546241335328]
+    if interaction.user.id not in allowed_users:
+        await interaction.response.send_message("❌ このコマンドを使う権限がありません。", ephemeral=True)
+        return
+    uid = str(user.id)
     user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
     before_level = user_data[uid]["level"]
-
-    # 経験値加算
     user_data[uid]["xp"] += amount
     new_level = calculate_level(user_data[uid]["xp"])
     user_data[uid]["level"] = new_level
     save_data(user_data)
-
-    await update_roles(member, new_level)
-
+    await update_roles(user, new_level)
     if new_level > before_level:
-        await ctx.send(f"🎉 {member.mention} に {amount} XP を付与しました！レベルが {before_level} → {new_level} に上がりました。")
+        msg = f"🎉 {user.mention} に {amount} XP を付与しました！レベルが {before_level} → {new_level} に上がりました。"
     else:
-        await ctx.send(f"✅ {member.mention} に {amount} XP を付与しました（現在 Lv{new_level}）。")
+        msg = f"✅ {user.mention} に {amount} XP を付与しました（現在 Lv{new_level}）。"
+    await interaction.response.send_message(msg)
 
-# --- ブラックジャック ---
-active_games = {}
+@bot.tree.command(name="removexp", description="指定ユーザーのXPを減少させます（権限者のみ）")
+@app_commands.describe(user="対象ユーザー", amount="減らすXP量")
+async def removexp_slash(interaction: discord.Interaction, user: discord.Member, amount: float):
+    allowed_users = [440893662701027328, 716667546241335328]
+    if interaction.user.id not in allowed_users:
+        await interaction.response.send_message("❌ このコマンドを使う権限がありません。", ephemeral=True)
+        return
+    uid = str(user.id)
+    user_data.setdefault(uid, {"xp": 0, "level": 0, "voice_minutes": 0})
+    before_level = user_data[uid]["level"]
+    user_data[uid]["xp"] = max(0, user_data[uid]["xp"] - amount)
+    new_level = calculate_level(user_data[uid]["xp"])
+    user_data[uid]["level"] = new_level
+    save_data(user_data)
+    await update_roles(user, new_level)
+    if new_level < before_level:
+        msg = f"⚠️ {user.mention} のXPを {amount} 減らしました！レベルが {before_level} → {new_level} に下がりました。"
+    else:
+        msg = f"✅ {user.mention} のXPを {amount} 減らしました（現在 Lv{new_level}）。"
+    await interaction.response.send_message(msg)
 
-class BlackjackButton(discord.ui.View):
-    def __init__(self, player_id):
-        super().__init__(timeout=30)
-        self.player_id = player_id
-
-    @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
-    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.player_id:
-            await interaction.response.send_message("これはあなたのターンではありません。", ephemeral=True)
-            return
-        game = active_games.get(self.player_id)
-        if not game:
-            await interaction.response.send_message("ゲームが見つかりません。", ephemeral=True)
-            return
-        game["player_hand"].append(random.randint(1, 11))
-        total = sum(game["player_hand"])
-        if total > 21:
-            await interaction.response.edit_message(content=f"あなたの手札: {game['player_hand']}（合計: {total}）\nバーストしました！", view=None)
-            del active_games[self.player_id]
-        else:
-            await interaction.response.edit_message(content=f"あなたの手札: {game['player_hand']}（合計: {total}）", view=self)
-
-    @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary)
-    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.player_id:
-            await interaction.response.send_message("これはあなたのターンではありません。", ephemeral=True)
-            return
-        game = active_games.pop(self.player_id, None)
-        if not game:
-            return
-        dealer_total = sum(game["dealer_hand"])
-        while dealer_total < 17:
-            game["dealer_hand"].append(random.randint(1, 11))
-            dealer_total = sum(game["dealer_hand"])
-
-        player_total = sum(game["player_hand"])
-        result = ""
-        if dealer_total > 21 or player_total > dealer_total:
-            result = "🎉 勝ち！"
-        elif dealer_total == player_total:
-            result = "🤝 引き分け"
-        else:
-            result = "😢 負け..."
-
-        await interaction.response.edit_message(
-            content=f"あなたの手札: {game['player_hand']}（合計: {player_total}）\n"
-                    f"ディーラーの手札: {game['dealer_hand']}（合計: {dealer_total}）\n{result}",
-            view=None
-        )
-
-@bot.command()
-async def blackjack(ctx):
-    dealer_hand = [random.randint(1, 11), random.randint(1, 11)]
-    player_hand = [random.randint(1, 11), random.randint(1, 11)]
-    active_games[ctx.author.id] = {
-        "dealer_hand": dealer_hand,
-        "player_hand": player_hand
-    }
-
-    await ctx.send(f"🃏 ディーラーの手札: [{dealer_hand[0]}, ?]")
-    total = sum(player_hand)
-    view = BlackjackButton(ctx.author.id)
-    await ctx.author.send(f"あなたの手札: {player_hand}（合計: {total}）", view=view)
-
-# 🔒 注意：ここは絶対に関数の中に書かないでください
+# 🔒 注意：最後
 bot.run(os.getenv("DISCORD_TOKEN"))
-
-
